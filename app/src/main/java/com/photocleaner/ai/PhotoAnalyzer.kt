@@ -200,7 +200,15 @@ object PhotoAnalyzer {
     private fun collect(dir: DocumentFile?, out: MutableList<DocumentFile>) {
         if (dir == null || !dir.isDirectory) return
         dir.listFiles().forEach { child ->
-            if (child.isDirectory) collect(child, out) else out += child
+            if (child.isDirectory) {
+                // The app's own trash is an archive, not a photo source.
+                // Never scan it back into the active collection.
+                if (child.name != PhotoTrash.TRASH_FOLDER_NAME) {
+                    collect(child, out)
+                }
+            } else {
+                out += child
+            }
         }
     }
 
