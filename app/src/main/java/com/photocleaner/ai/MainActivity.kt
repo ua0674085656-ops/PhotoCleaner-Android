@@ -1,6 +1,5 @@
 package com.photocleaner.ai
 
-import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -50,7 +49,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.rgb(18, 18, 18))
         }
         val title = TextView(this).apply {
-            text = "Photo Cleaner AI — Similar Photos v3"
+            text = "Photo Cleaner AI — Similar Photos v4"
             textSize = 22f
             setTextColor(Color.WHITE)
             setPadding(0, 0, 0, 14)
@@ -95,8 +94,10 @@ class MainActivity : AppCompatActivity() {
                     scanButton.isEnabled = true
                     deleteButton.isEnabled = data.any { it.decision == "CANDIDATE" }
                     val candidates = data.count { it.decision == "CANDIDATE" }
+                    val keep = data.count { it.decision == "KEEP" }
+                    val best = data.count { it.decision == "BEST" }
                     val groups = data.map { it.groupId }.filter { it.isNotEmpty() }.distinct().size
-                    progress.text = "Готово: ${data.size} фото. Групп совпадений: $groups. Кандидатов: $candidates."
+                    progress.text = "Готово: ${data.size} фото. Групп: $groups. Лучших: $best. Оставляем: $keep. В корзину: $candidates."
                 }
             } catch (t: Throwable) {
                 runOnUiThread {
@@ -125,8 +126,14 @@ class MainActivity : AppCompatActivity() {
                 textSize = 13f
                 val mb = p.size / 1024.0 / 1024.0
                 val match = if (p.groupId.isNotEmpty()) " | Match: ${p.similarity}%" else ""
-                text = "${p.decision}  ${p.groupId.ifEmpty { "—" }}  #${p.rank}$match\n" +
-                    "Blur: ${"%.1f".format(p.blurScore)} | Exp: ${"%.2f".format(p.exposure)}\n" +
+                val action = when (p.decision) {
+                    "BEST" -> "BEST — лучший кадр"
+                    "KEEP" -> "KEEP — оставить в серии"
+                    "CANDIDATE" -> "CANDIDATE — в корзину"
+                    else -> p.decision
+                }
+                text = "$action  ${p.groupId.ifEmpty { "—" }}  #${p.rank}$match\n" +
+                    "Качество: ${"%.1f".format(PhotoAnalyzer.quality(p))} | Blur: ${"%.1f".format(p.blurScore)} | Exp: ${"%.2f".format(p.exposure)}\n" +
                     "${p.width}×${p.height} | ${"%.2f".format(mb)} MB\n${p.name}"
                 setPadding(12, 0, 0, 0)
             }
@@ -134,7 +141,6 @@ class MainActivity : AppCompatActivity() {
             row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             list.addView(row)
 
-            // Decode only a small thumbnail for the scrolling list.
             executor.execute {
                 val bitmap = decodeThumbnail(p.uri, 220, 220)
                 if (bitmap != null && !isFinishing) {
@@ -167,10 +173,6 @@ class MainActivity : AppCompatActivity() {
         return contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     }
 
-    /**
-     * Never permanently delete a candidate. Move it into a dedicated
-     * "PhotoCleaner Trash" folder inside the selected tree instead.
-     */
     private fun moveCandidatesToTrash() {
         val tree = selectedTree ?: return
         val candidates = results.filter { it.decision == "CANDIDATE" }
@@ -185,11 +187,7 @@ class MainActivity : AppCompatActivity() {
             var failed = 0
             candidates.forEach { p ->
                 val source = DocumentFile.fromSingleUri(this, p.uri)
-                if (source != null && PhotoTrash.moveToTrash(this, tree, source)) {
-                    moved++
-                } else {
-                    failed++
-                }
+                if (source != null && PhotoTrash.moveToTrash(this, tree, source)) moved++ else failed++
             }
 
             runOnUiThread {
