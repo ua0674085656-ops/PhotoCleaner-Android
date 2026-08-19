@@ -50,7 +50,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.rgb(18, 18, 18))
         }
         val title = TextView(this).apply {
-            text = "Photo Cleaner AI — Similar Photos v2"
+            text = "Photo Cleaner AI — Similar Photos v3"
             textSize = 22f
             setTextColor(Color.WHITE)
             setPadding(0, 0, 0, 14)
@@ -61,7 +61,7 @@ class MainActivity : AppCompatActivity() {
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val choose = Button(this).apply { text = "ВЫБРАТЬ ПАПКУ"; setOnClickListener { folderPicker.launch(null) } }
         scanButton = Button(this).apply { text = "СКАНИРОВАТЬ"; isEnabled = false; setOnClickListener { startScan() } }
-        deleteButton = Button(this).apply { text = "УДАЛИТЬ КАНДИДАТОВ"; isEnabled = false; setOnClickListener { deleteCandidates() } }
+        deleteButton = Button(this).apply { text = "В КОРЗИНУ"; isEnabled = false; setOnClickListener { moveCandidatesToTrash() } }
         buttons.addView(choose, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         buttons.addView(scanButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         buttons.addView(deleteButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -167,16 +167,42 @@ class MainActivity : AppCompatActivity() {
         return contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     }
 
-    private fun deleteCandidates() {
+    /**
+     * Never permanently delete a candidate. Move it into a dedicated
+     * "PhotoCleaner Trash" folder inside the selected tree instead.
+     */
+    private fun moveCandidatesToTrash() {
+        val tree = selectedTree ?: return
         val candidates = results.filter { it.decision == "CANDIDATE" }
-        var deleted = 0
-        candidates.forEach { p ->
-            try {
-                if (DocumentFile.fromSingleUri(this, p.uri)?.delete() == true) deleted++
-            } catch (_: Throwable) { }
-        }
-        progress.text = "Удалено: $deleted. Ничего не удалялось из уникальных групп."
+        if (candidates.isEmpty()) return
+
         deleteButton.isEnabled = false
+        scanButton.isEnabled = false
+        progress.text = "Перемещение в корзину..."
+
+        executor.execute {
+            var moved = 0
+            var failed = 0
+            candidates.forEach { p ->
+                val source = DocumentFile.fromSingleUri(this, p.uri)
+                if (source != null && PhotoTrash.moveToTrash(this, tree, source)) {
+                    moved++
+                } else {
+                    failed++
+                }
+            }
+
+            runOnUiThread {
+                scanButton.isEnabled = true
+                results = results.filterNot { it.decision == "CANDIDATE" }
+                progress.text = if (failed == 0) {
+                    "В корзину: $moved. Файлы не удалены окончательно."
+                } else {
+                    "В корзину: $moved. Ошибок перемещения: $failed."
+                }
+                deleteButton.isEnabled = false
+            }
+        }
     }
 
     override fun onDestroy() {
