@@ -1,9 +1,9 @@
 package com.photocleaner.ai
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -50,7 +50,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.rgb(18, 18, 18))
         }
         val title = TextView(this).apply {
-            text = "Photo Cleaner AI — Android MVP-1"
+            text = "Photo Cleaner AI — Similar Photos v2"
             textSize = 22f
             setTextColor(Color.WHITE)
             setPadding(0, 0, 0, 14)
@@ -96,7 +96,7 @@ class MainActivity : AppCompatActivity() {
                     deleteButton.isEnabled = data.any { it.decision == "CANDIDATE" }
                     val candidates = data.count { it.decision == "CANDIDATE" }
                     val groups = data.map { it.groupId }.filter { it.isNotEmpty() }.distinct().size
-                    progress.text = "Готово: ${data.size} фото. Групп дублей: $groups. Кандидатов: $candidates."
+                    progress.text = "Готово: ${data.size} фото. Групп совпадений: $groups. Кандидатов: $candidates."
                 }
             } catch (t: Throwable) {
                 runOnUiThread {
@@ -124,7 +124,8 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(Color.WHITE)
                 textSize = 13f
                 val mb = p.size / 1024.0 / 1024.0
-                text = "${p.decision}  ${p.groupId.ifEmpty { "—" }}  #${p.rank}\n" +
+                val match = if (p.groupId.isNotEmpty()) " | Match: ${p.similarity}%" else ""
+                text = "${p.decision}  ${p.groupId.ifEmpty { "—" }}  #${p.rank}$match\n" +
                     "Blur: ${"%.1f".format(p.blurScore)} | Exp: ${"%.2f".format(p.exposure)}\n" +
                     "${p.width}×${p.height} | ${"%.2f".format(mb)} MB\n${p.name}"
                 setPadding(12, 0, 0, 0)
@@ -133,8 +134,7 @@ class MainActivity : AppCompatActivity() {
             row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             list.addView(row)
 
-            // Never decode the original 6000×4000 image for the scrolling list.
-            // A small thumbnail keeps scrolling responsive and avoids large UI allocations.
+            // Decode only a small thumbnail for the scrolling list.
             executor.execute {
                 val bitmap = decodeThumbnail(p.uri, 220, 220)
                 if (bitmap != null && !isFinishing) {
