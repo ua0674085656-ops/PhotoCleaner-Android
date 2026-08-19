@@ -18,6 +18,7 @@ data class PhotoResult(
     val size: Long,
     val width: Int,
     val height: Int,
+    val modified: Long,
     val blurScore: Double,
     val exposure: Double,
     val hash: String,
@@ -34,10 +35,12 @@ data class PhotoResult(
 object PhotoAnalyzer {
     private val imageExt = setOf("jpg", "jpeg", "png", "webp", "heic", "heif")
 
-    // More permissive than the old single dHash threshold. Burst photos can
-    // differ in framing, focus, exposure and small object movement.
+    // Similarity is deliberately conservative: a photo is only a deletion
+    // candidate when it belongs to a visually coherent group.
     private const val MIN_SIMILARITY = 0.72
     private const val STRONG_PHASH_DISTANCE = 12
+    private const val TOP_SERIES_KEEP = 3
+    private const val SERIES_MIN_SIZE = 4
 
     fun scan(context: Context, rootUri: Uri, onProgress: (String) -> Unit): List<PhotoResult> {
         val files = mutableListOf<DocumentFile>()
@@ -64,6 +67,7 @@ object PhotoAnalyzer {
                 size = file.length(),
                 width = bounds.outWidth,
                 height = bounds.outHeight,
+                modified = file.lastModified(),
                 blurScore = features.blur,
                 exposure = features.exposure,
                 hash = exactHash,
@@ -136,12 +140,22 @@ object PhotoAnalyzer {
 
         val groups = results.indices.groupBy { find(it) }.values.filter { it.size > 1 }
         groups.forEachIndexed { groupIndex, indexes ->
-            val ordered = indexes.map { results[it] }.sortedByDescending { quality(it) }
+            val ordered = indexes.map { results[it] }.sortedWith(
+                compareByDescending<PhotoResult> { quality(it) }
+                    .thenBy { it.modified }
+                    .thenBy { it.name }
+            )
             val gid = "G" + (groupIndex + 1).toString().padStart(4, '0')
+            val keepCount = if (ordered.size >= SERIES_MIN_SIZE) TOP_SERIES_KEEP else 1
+
             ordered.forEachIndexed { rank, item ->
                 item.groupId = gid
                 item.rank = rank + 1
-                item.decision = if (rank == 0) "BEST" else "CANDIDATE"
+                item.decision = when {
+                    rank == 0 -> "BEST"
+                    rank < keepCount -> "KEEP"
+                    else -> "CANDIDATE"
+                }
                 val idx = results.indexOf(item)
                 item.similarity = if (bestScore[idx] > 0.0) {
                     (bestScore[idx] * 100.0).toInt()
@@ -170,12 +184,10 @@ object PhotoAnalyzer {
         val aspectB = b.width.toDouble() / b.height.toDouble()
         val aspectRatio = max(aspectA, aspectB) / min(aspectA, aspectB)
 
-        // A strong pHash match survives a moderate crop/reframe.
         if (pd <= STRONG_PHASH_DISTANCE && aspectRatio <= 1.20) {
             return max(0.0, 0.52 * p + 0.20 * d + 0.16 * v + 0.12 * m)
         }
 
-        // For burst shots require agreement from at least one gradient hash.
         val score = 0.48 * p + 0.22 * d + 0.18 * v + 0.12 * m
         val aspectPenalty = min(0.10, max(0.0, aspectRatio - 1.08) * 0.18)
         val gradientAgreement = dh <= 18 || vh <= 18
@@ -184,14 +196,19 @@ object PhotoAnalyzer {
 
     private fun hamming(a: Long, b: Long): Int = java.lang.Long.bitCount(a xor b)
 
+    /**
+     * Quality ranking intentionally favors photographic quality rather than
+     * filename/date. Sharpness and resolution dominate; exposure is a softer
+     * signal. File density is retained only as a weak compression proxy.
+     */
     fun quality(p: PhotoResult): Double {
-        val resolution = min(20.0, (p.width.toDouble() * p.height.toDouble()) / 1_000_000.0)
-        val sharpness = min(40.0, p.blurScore / 20.0)
-        val exposureScore = max(0.0, 20.0 - abs(p.exposure - 0.50) * 40.0)
+        val resolution = min(30.0, (p.width.toDouble() * p.height.toDouble()) / 1_000_000.0 * 1.5)
+        val sharpness = min(45.0, p.blurScore / 18.0)
+        val exposureScore = max(0.0, 15.0 - abs(p.exposure - 0.50) * 30.0)
         val fileDensity = min(
-            20.0,
+            10.0,
             if (p.width > 0 && p.height > 0)
-                p.size.toDouble() / (p.width * p.height).toDouble() * 100.0
+                p.size.toDouble() / (p.width * p.height).toDouble() * 70.0
             else 0.0
         )
         return resolution + sharpness + exposureScore + fileDensity
@@ -202,10 +219,7 @@ object PhotoAnalyzer {
         dir.listFiles().forEach { child ->
             if (child.isDirectory) {
                 // The app's own trash is an archive, not a photo source.
-                // Never scan it back into the active collection.
-                if (child.name != PhotoTrash.TRASH_FOLDER_NAME) {
-                    collect(child, out)
-                }
+                if (child.name != PhotoTrash.TRASH_FOLDER_NAME) collect(child, out)
             } else {
                 out += child
             }
@@ -266,7 +280,6 @@ object PhotoAnalyzer {
         return Features(variance * 10000.0, mean, ph, dh, vh, mh)
     }
 
-    /** Standard 32x32 -> 8x8 low-frequency DCT perceptual hash. */
     private fun pHash(gray: DoubleArray): Long {
         val size = 32
         val low = DoubleArray(8 * 8)
@@ -289,7 +302,6 @@ object PhotoAnalyzer {
         values.sort()
         val median = values[values.size / 2]
 
-        // Exclude DC and encode 63 AC coefficients + one deterministic bit.
         var hash = 0L
         for (y in 0 until 8) for (x in 0 until 8) {
             if (x == 0 && y == 0) continue
