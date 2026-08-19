@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
@@ -49,13 +50,20 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.rgb(18, 18, 18))
         }
         val title = TextView(this).apply {
-            text = "Photo Cleaner AI — Similar Photos v4"
+            text = "Photo Cleaner AI — Similar Photos v5"
             textSize = 22f
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 14)
+            setPadding(0, 0, 0, 10)
         }
         status = TextView(this).apply { setTextColor(Color.LTGRAY); text = "Выберите папку с фотографиями" }
         progress = TextView(this).apply { setTextColor(Color.rgb(120, 220, 120)); text = "Готов" }
+
+        val legend = TextView(this).apply {
+            text = "🟢 ЛУЧШЕЕ     🟡 ОСТАВИТЬ     🔴 В КОРЗИНУ"
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            setPadding(0, 8, 0, 8)
+        }
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val choose = Button(this).apply { text = "ВЫБРАТЬ ПАПКУ"; setOnClickListener { folderPicker.launch(null) } }
@@ -74,6 +82,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(title)
         root.addView(status)
         root.addView(progress)
+        root.addView(legend)
         root.addView(buttons)
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
@@ -97,7 +106,7 @@ class MainActivity : AppCompatActivity() {
                     val keep = data.count { it.decision == "KEEP" }
                     val best = data.count { it.decision == "BEST" }
                     val groups = data.map { it.groupId }.filter { it.isNotEmpty() }.distinct().size
-                    progress.text = "Готово: ${data.size} фото. Групп: $groups. Лучших: $best. Оставляем: $keep. В корзину: $candidates."
+                    progress.text = "Готово: ${data.size} фото. Групп: $groups. 🟢 $best  🟡 $keep  🔴 $candidates"
                 }
             } catch (t: Throwable) {
                 runOnUiThread {
@@ -108,13 +117,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun rowBackground(decision: String): GradientDrawable {
+        val color = when (decision) {
+            "BEST" -> Color.rgb(24, 75, 40)       // green
+            "KEEP" -> Color.rgb(78, 68, 24)       // yellow/amber
+            "CANDIDATE" -> Color.rgb(82, 28, 30)  // red
+            else -> Color.rgb(32, 32, 32)
+        }
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = 14f
+            setStroke(2, when (decision) {
+                "BEST" -> Color.rgb(70, 190, 100)
+                "KEEP" -> Color.rgb(220, 185, 55)
+                "CANDIDATE" -> Color.rgb(220, 75, 75)
+                else -> Color.DKGRAY
+            })
+        }
+    }
+
     private fun renderResults(data: List<PhotoResult>) {
         val sorted = data.sortedWith(compareBy<PhotoResult> { it.groupId.ifEmpty { "ZZZZZZ" } }.thenBy { it.rank }.thenBy { it.name })
         sorted.take(500).forEach { p ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(4, 8, 4, 8)
+                setPadding(8, 10, 8, 10)
+                background = rowBackground(p.decision)
             }
             val image = ImageView(this).apply {
                 layoutParams = LinearLayout.LayoutParams(110, 110)
@@ -125,21 +154,23 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(Color.WHITE)
                 textSize = 13f
                 val mb = p.size / 1024.0 / 1024.0
-                val match = if (p.groupId.isNotEmpty()) " | Match: ${p.similarity}%" else ""
+                val match = if (p.groupId.isNotEmpty()) " | СХОЖЕСТЬ: ${p.similarity}%" else ""
                 val action = when (p.decision) {
-                    "BEST" -> "BEST — лучший кадр"
-                    "KEEP" -> "KEEP — оставить в серии"
-                    "CANDIDATE" -> "CANDIDATE — в корзину"
+                    "BEST" -> "🟢 ЛУЧШЕЕ"
+                    "KEEP" -> "🟡 ОСТАВИТЬ"
+                    "CANDIDATE" -> "🔴 В КОРЗИНУ"
                     else -> p.decision
                 }
                 text = "$action  ${p.groupId.ifEmpty { "—" }}  #${p.rank}$match\n" +
-                    "Качество: ${"%.1f".format(PhotoAnalyzer.quality(p))} | Blur: ${"%.1f".format(p.blurScore)} | Exp: ${"%.2f".format(p.exposure)}\n" +
+                    "Качество: ${"%.1f".format(PhotoAnalyzer.quality(p))} | Резкость: ${"%.1f".format(p.blurScore)} | Exp: ${"%.2f".format(p.exposure)}\n" +
                     "${p.width}×${p.height} | ${"%.2f".format(mb)} MB\n${p.name}"
-                setPadding(12, 0, 0, 0)
+                setPadding(12, 0, 4, 0)
             }
             row.addView(image)
             row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            list.addView(row)
+            list.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(0, 4, 0, 4)
+            })
 
             executor.execute {
                 val bitmap = decodeThumbnail(p.uri, 220, 220)
