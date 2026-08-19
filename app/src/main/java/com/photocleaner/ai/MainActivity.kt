@@ -1,5 +1,8 @@
 package com.photocleaner.ai
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -64,7 +67,11 @@ class MainActivity : AppCompatActivity() {
         buttons.addView(deleteButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val scroll = ScrollView(this).apply { addView(list) }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = false
+            isVerticalScrollBarEnabled = true
+            addView(list, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
         root.addView(title)
         root.addView(status)
         root.addView(progress)
@@ -87,7 +94,9 @@ class MainActivity : AppCompatActivity() {
                     renderResults(data)
                     scanButton.isEnabled = true
                     deleteButton.isEnabled = data.any { it.decision == "CANDIDATE" }
-                    progress.text = "Готово: ${data.size} фото. Кандидатов: ${data.count { it.decision == "CANDIDATE" }}."
+                    val candidates = data.count { it.decision == "CANDIDATE" }
+                    val groups = data.map { it.groupId }.filter { it.isNotEmpty() }.distinct().size
+                    progress.text = "Готово: ${data.size} фото. Групп дублей: $groups. Кандидатов: $candidates."
                 }
             } catch (t: Throwable) {
                 runOnUiThread {
@@ -100,7 +109,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderResults(data: List<PhotoResult>) {
         val sorted = data.sortedWith(compareBy<PhotoResult> { it.groupId.ifEmpty { "ZZZZZZ" } }.thenBy { it.rank }.thenBy { it.name })
-        sorted.take(300).forEach { p ->
+        sorted.take(500).forEach { p ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -109,7 +118,7 @@ class MainActivity : AppCompatActivity() {
             val image = ImageView(this).apply {
                 layoutParams = LinearLayout.LayoutParams(110, 110)
                 scaleType = ImageView.ScaleType.CENTER_CROP
-                setImageURI(p.uri)
+                setBackgroundColor(Color.DKGRAY)
             }
             val text = TextView(this).apply {
                 setTextColor(Color.WHITE)
@@ -123,7 +132,39 @@ class MainActivity : AppCompatActivity() {
             row.addView(image)
             row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             list.addView(row)
+
+            // Never decode the original 6000×4000 image for the scrolling list.
+            // A small thumbnail keeps scrolling responsive and avoids large UI allocations.
+            executor.execute {
+                val bitmap = decodeThumbnail(p.uri, 220, 220)
+                if (bitmap != null && !isFinishing) {
+                    runOnUiThread {
+                        if (!isFinishing) image.setImageBitmap(bitmap)
+                    }
+                }
+            }
         }
+        if (sorted.size > 500) {
+            val more = TextView(this).apply {
+                text = "Показано 500 из ${sorted.size} фото."
+                setTextColor(Color.LTGRAY)
+                setPadding(8, 16, 8, 24)
+            }
+            list.addView(more)
+        }
+    }
+
+    private fun decodeThumbnail(uri: Uri, targetW: Int, targetH: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= targetW && bounds.outHeight / (sample * 2) >= targetH) {
+            sample *= 2
+        }
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     }
 
     private fun deleteCandidates() {
